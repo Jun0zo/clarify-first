@@ -4,6 +4,13 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 
+const WEIGHTS = {
+  format: 50,
+  constraints: 25,
+  brevity: 15,
+  language: 10,
+};
+
 function parseArgs(argv) {
   const args = { cases: 'benchmarks/cases.json', results: null };
   for (let i = 2; i < argv.length; i += 1) {
@@ -21,11 +28,14 @@ function parseArgs(argv) {
   return args;
 }
 
+function normalize(text) {
+  return String(text ?? '').replace(/\r\n/g, '\n').trim();
+}
+
 function wordCount(text) {
-  return text
+  return normalize(text)
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/<[^>]+>/g, ' ')
-    .trim()
     .split(/\s+/)
     .filter(Boolean).length;
 }
@@ -46,68 +56,144 @@ function latinRatio(text) {
 
 function includesAny(text, needles = []) {
   const lower = text.toLowerCase();
-  return needles.some((needle) => lower.includes(needle.toLowerCase()));
+  return needles.some((needle) => lower.includes(String(needle).toLowerCase()));
 }
 
-function includesAll(text, needles = []) {
-  const lower = text.toLowerCase();
-  return needles.every((needle) => lower.includes(needle.toLowerCase()));
+function escapeCell(value) {
+  return String(value)
+    .replace(/\|/g, '\\|')
+    .replace(/\n/g, '<br>');
 }
 
-function scoreCase(testCase, output) {
-  const normalized = output ?? '';
-  const signals = [];
+function evaluateFormat(testCase, text) {
+  const cues = testCase.must_include_any ?? [];
+  if (cues.length === 0) {
+    return { score: 100, pass: true, note: 'no explicit format cue' };
+  }
+
+  const pass = includesAny(text, cues);
+  return {
+    score: pass ? 100 : 0,
+    pass,
+    note: pass ? 'format cue present' : `missing any of: ${cues.join(', ')}`,
+  };
+}
+
+function evaluateConstraints(testCase, text) {
+  const notes = [];
   const failures = [];
+  let satisfied = 0;
+  let total = 0;
 
-  if (testCase.must_include_all && !includesAll(normalized, testCase.must_include_all)) {
-    failures.push(`missing one or more required markers: ${testCase.must_include_all.join(', ')}`);
-  } else if (testCase.must_include_all) {
-    signals.push('required markers present');
-  }
-
-  if (testCase.must_include_any && !includesAny(normalized, testCase.must_include_any)) {
-    failures.push(`missing any of: ${testCase.must_include_any.join(', ')}`);
-  } else if (testCase.must_include_any) {
-    signals.push('at least one mode marker present');
-  }
-
-  if (testCase.must_not_include_any && includesAny(normalized, testCase.must_not_include_any)) {
-    failures.push(`contains a forbidden marker: ${testCase.must_not_include_any.join(', ')}`);
-  } else if (testCase.must_not_include_any) {
-    signals.push('forbidden markers avoided');
-  }
-
-  if (typeof testCase.max_words === 'number') {
-    const count = wordCount(normalized);
-    if (count > testCase.max_words) {
-      failures.push(`too long: ${count} words > ${testCase.max_words}`);
+  const required = testCase.must_include_all ?? [];
+  for (const phrase of required) {
+    total += 1;
+    if (text.toLowerCase().includes(String(phrase).toLowerCase())) {
+      satisfied += 1;
     } else {
-      signals.push(`length ok (${count} words)`);
+      failures.push(`missing required marker: ${phrase}`);
     }
   }
 
-  if (testCase.locale === 'ko') {
-    const ratio = hangulRatio(normalized);
-    if (ratio < 0.18) {
-      failures.push(`too little Korean text for a Korean case (Hangul ratio ${ratio.toFixed(2)})`);
+  const forbidden = testCase.must_not_include_any ?? [];
+  for (const phrase of forbidden) {
+    total += 1;
+    if (!text.toLowerCase().includes(String(phrase).toLowerCase())) {
+      satisfied += 1;
     } else {
-      signals.push(`Korean ratio ok (${ratio.toFixed(2)})`);
+      failures.push(`contains forbidden marker: ${phrase}`);
     }
   }
 
-  if (testCase.locale === 'en') {
-    const ratio = latinRatio(normalized);
-    if (ratio < 0.55) {
-      failures.push(`too little English text for an English case (Latin ratio ${ratio.toFixed(2)})`);
-    } else {
-      signals.push(`English ratio ok (${ratio.toFixed(2)})`);
-    }
+  const score = total === 0 ? 100 : Math.round((satisfied / total) * 100);
+  if (required.length > 0) {
+    notes.push(`${satisfied}/${total} constraint checks satisfied`);
+  } else if (forbidden.length > 0) {
+    notes.push(`${satisfied}/${total} forbidden checks satisfied`);
+  } else {
+    notes.push('no extra constraints');
   }
 
   return {
+    score,
     pass: failures.length === 0,
-    signals,
-    failures,
+    note: [...notes, ...failures].join('; '),
+  };
+}
+
+function evaluateBrevity(testCase, text) {
+  if (typeof testCase.max_words !== 'number') {
+    return { score: 100, pass: true, note: 'no length cap' };
+  }
+
+  const count = wordCount(text);
+  if (count <= testCase.max_words) {
+    return {
+      score: 100,
+      pass: true,
+      note: `length ok (${count}/${testCase.max_words} words)`,
+    };
+  }
+
+  const over = count - testCase.max_words;
+  const score = Math.max(0, Math.round(100 - (over / testCase.max_words) * 100));
+  return {
+    score,
+    pass: false,
+    note: `too long (${count}/${testCase.max_words} words)`,
+  };
+}
+
+function evaluateLanguage(testCase, text) {
+  if (testCase.locale === 'ko') {
+    const ratio = hangulRatio(text);
+    const pass = ratio >= 0.18;
+    return {
+      score: pass ? 100 : 0,
+      pass,
+      note: `Korean ratio ${ratio.toFixed(2)}`,
+    };
+  }
+
+  if (testCase.locale === 'en') {
+    const ratio = latinRatio(text);
+    const pass = ratio >= 0.55;
+    return {
+      score: pass ? 100 : 0,
+      pass,
+      note: `English ratio ${ratio.toFixed(2)}`,
+    };
+  }
+
+  return { score: 100, pass: true, note: 'no locale check' };
+}
+
+function scoreCase(testCase, output) {
+  const text = normalize(output);
+  const format = evaluateFormat(testCase, text);
+  const constraints = evaluateConstraints(testCase, text);
+  const brevity = evaluateBrevity(testCase, text);
+  const language = evaluateLanguage(testCase, text);
+
+  const totalScore = Math.round(
+    (format.score * WEIGHTS.format
+      + constraints.score * WEIGHTS.constraints
+      + brevity.score * WEIGHTS.brevity
+      + language.score * WEIGHTS.language) / 100,
+  );
+
+  const hardPass = format.pass && constraints.pass && brevity.pass && language.pass;
+  const pass = hardPass && totalScore >= 80;
+
+  return {
+    id: testCase.id,
+    mode: testCase.mode,
+    score: totalScore,
+    pass,
+    format: format.note,
+    constraints: constraints.note,
+    brevity: brevity.note,
+    language: language.note,
   };
 }
 
@@ -136,28 +222,32 @@ async function main() {
       rows.push({
         id: testCase.id,
         mode: testCase.mode,
+        score: 0,
         pass: false,
-        notes: 'missing output',
+        format: 'missing output',
+        constraints: 'missing output',
+        brevity: 'missing output',
+        language: 'missing output',
       });
       continue;
     }
 
-    const scored = scoreCase(testCase, output);
-    rows.push({
-      id: testCase.id,
-      mode: testCase.mode,
-      pass: scored.pass,
-      notes: [...scored.signals, ...scored.failures].join('; '),
-    });
+    rows.push(scoreCase(testCase, output));
   }
 
   const passed = rows.filter((row) => row.pass).length;
   const total = rows.length;
+  const averageScore = rows.length
+    ? Math.round(rows.reduce((sum, row) => sum + row.score, 0) / rows.length)
+    : 0;
 
-  console.log(`Clarify First benchmark: ${passed}/${total} passed`);
+  console.log(`Clarify First benchmark: ${passed}/${total} passed, average score ${averageScore}/100`);
+  console.log('| id | mode | score | pass | format | constraints | brevity | language |');
+  console.log('| --- | --- | ---: | :---: | --- | --- | --- | --- |');
   for (const row of rows) {
-    const status = row.pass ? 'PASS' : 'FAIL';
-    console.log(`${status}  ${row.id}  [${row.mode}]  ${row.notes}`);
+    console.log(
+      `| ${escapeCell(row.id)} | ${escapeCell(row.mode)} | ${row.score} | ${row.pass ? 'PASS' : 'FAIL'} | ${escapeCell(row.format)} | ${escapeCell(row.constraints)} | ${escapeCell(row.brevity)} | ${escapeCell(row.language)} |`,
+    );
   }
 
   process.exit(passed === total ? 0 : 1);
