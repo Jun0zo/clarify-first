@@ -117,6 +117,6 @@ If `CODEX_HOME` is unset, it falls back to `~/.codex/skills/clarify-first`.
 
 ## Evaluation
 
-Benchmark development now lives in a separate repo: [clarify-first-evals](https://github.com/Jun0zo/clarify-first-evals).
+Benchmark development now lives in a separate repo: [RepBench](https://github.com/Jun0zo/repbench).
 
 This repo stays focused on the installable skill package, while the eval repo can change independently as the benchmark cases and scorer evolve.
