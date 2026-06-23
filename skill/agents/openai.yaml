@@ -1,4 +1,7 @@
 interface:
   display_name: "Response Shaper"
   short_description: "Turn complex answers into clear, usable formats"
+  icon_small: "./assets/response-shaper-icon.png"
+  icon_large: "./assets/response-shaper-icon.png"
+  brand_color: "#0E3A5B"
   default_prompt: "Use $response-shaper to turn complex answers into the clearest format, choosing between explanation, visualization, summary, checklist, comparison, or timeline."
