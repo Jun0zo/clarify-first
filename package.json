@@ -1,0 +1,21 @@
+{
+  "name": "response-shaper-skill",
+  "version": "0.1.0",
+  "description": "Installable Codex skill for shaping complex answers into the clearest presentation mode.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "response-shaper-install": "./scripts/install-skill.js"
+  },
+  "scripts": {
+    "install:skill": "node ./scripts/install-skill.js"
+  },
+  "files": [
+    "README.md",
+    "scripts",
+    "skill"
+  ]
+}

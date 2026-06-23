@@ -1,0 +1,4 @@
+interface:
+  display_name: "Response Shaper"
+  short_description: "Turn complex answers into clear, usable formats"
+  default_prompt: "Use $response-shaper to turn complex answers into the clearest format, choosing between explanation, visualization, summary, checklist, comparison, or timeline."
